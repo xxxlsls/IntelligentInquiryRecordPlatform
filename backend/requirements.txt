@@ -29,3 +29,7 @@ python-docx==1.2.0
 
 # 环境变量加载
 python-dotenv==1.1.0
+
+# 大模型私有化接入（OpenAI 兼容 HTTP 接口，仅用 httpx 直连不引入厂商 SDK）
+# 显式声明：此前为 starlette 传递依赖，LLM 基础设施层直接使用，需固定版本
+httpx==0.28.1

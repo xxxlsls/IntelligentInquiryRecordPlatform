@@ -31,6 +31,7 @@ from app.schemas.fiveflow import (
     FiveFlowElementOut,
     FlowCoverage,
 )
+from app.services.llm import LLMService, LLMUnavailableError
 
 
 # ============================================================
@@ -89,6 +90,8 @@ class FiveFlowService:
         # 缓存要素定义目录（5.1），按 element_code 索引
         self._definitions: dict[str, FlowElementDefinition] = {}
         self._load_definitions()
+        # 大模型能力门面（能力三：正则 + LLM 融合抽取）；未启用时调用一律抛降级信号
+        self._llm = LLMService(db)
 
     def _load_definitions(self) -> None:
         """加载五流要素定义目录（FlowElementDefinition）。"""
@@ -129,7 +132,12 @@ class FiveFlowService:
         self.db.commit()
 
     def _extract_single_qa(self, session_id: str, qa: QAItem, text: str) -> None:
-        """对单条问答执行抽取。"""
+        """对单条问答执行抽取：正则（高精度）优先，再融合 LLM（高召回）。
+
+        融合策略（能力三）：正则命中值优先保留；LLM 独有值以较低 confidence 写入
+        并置 need_manual_confirm=True（ER-4 低置信不自动填充、待人工确认）；
+        要素编号需在定义目录内，非法丢弃。LLM 不可用时仅用正则结果，行为与当前一致。
+        """
         lower_text = text.lower()
         # 通过关键词映射确定该问答可能涉及的要素编号
         candidate_codes: set[str] = set()
@@ -137,7 +145,8 @@ class FiveFlowService:
             if keyword in lower_text:
                 candidate_codes.update(codes)
 
-        # 对每个候选要素，用对应正则抽取具体值
+        # 1) 正则抽取（高精度）：逐候选要素用对应正则抽取具体值
+        regex_hit_codes: set[str] = set()
         for code in candidate_codes:
             definition = self._definitions.get(code)
             if definition is None:
@@ -153,6 +162,59 @@ class FiveFlowService:
                     confidence=0.9,
                     need_manual_confirm=False,
                 )
+                regex_hit_codes.add(code)
+
+        # 2) LLM 抽取（高召回）与融合（未启用/不可用时静默降级）
+        self._merge_llm_extraction(session_id, qa, text, candidate_codes, regex_hit_codes)
+
+    def _merge_llm_extraction(
+        self,
+        session_id: str,
+        qa: QAItem,
+        text: str,
+        candidate_codes: set[str],
+        regex_hit_codes: set[str],
+    ) -> None:
+        """调用 LLM 抽取并与正则结果融合（能力三）。
+
+        仅当 LLM_ENABLED 与 LLM_ENABLE_EXTRACTION 均开启时生效；任何不可用情形
+        捕获 LLMUnavailableError 后直接返回，仅保留正则结果（行为与当前一致）。
+        """
+        if not (settings.LLM_ENABLED and settings.LLM_ENABLE_EXTRACTION):
+            return
+        try:
+            result = self._llm.extract_elements(text, sorted(candidate_codes) or None)
+        except LLMUnavailableError:
+            return
+
+        for item in result.items:
+            code = item.element_code
+            # 要素编号需在定义目录内，非法丢弃
+            definition = self._definitions.get(code)
+            if definition is None:
+                continue
+            # 正则命中值优先保留：同编号已由正则抽取则跳过
+            if code in regex_hit_codes:
+                continue
+            # 本会话已有值（正则或先前抽取）亦不覆盖，仅采纳 LLM “独有值”
+            existing = self.db.execute(
+                select(FiveFlowElement).where(
+                    FiveFlowElement.session_id == session_id,
+                    FiveFlowElement.element_code == code,
+                )
+            ).scalar_one_or_none()
+            if existing is not None and existing.is_collected:
+                continue
+            # LLM 独有值：较低置信写入并标记待人工确认（ER-4）
+            self._upsert_element(
+                session_id=session_id,
+                definition=definition,
+                value=item.value,
+                evidence_snippet=item.evidence_snippet,
+                source_qa_id=qa.id,
+                confidence=item.confidence or 0.6,
+                need_manual_confirm=True,
+            )
 
     def _extract_value(self, code: str, field_type: str, text: str) -> tuple[str | None, str | None]:
         """根据要素字段类型从文本抽取值。

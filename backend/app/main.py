@@ -58,6 +58,22 @@ async def lifespan(app: FastAPI):
         finally:
             db.close()
 
+    # 大模型私有化接入：若总开关与语义能力开启，best-effort 预计算模板语义向量（能力一）。
+    # 异常仅告警不阻断启动：模型不可达时推荐链路会自动降级到字符 bigram。
+    if settings.LLM_ENABLED and settings.LLM_ENABLE_SEMANTIC_MATCH:
+        from app.services.llm import LLMService, LLMUnavailableError
+
+        db = SessionLocal()
+        try:
+            result = LLMService(db).reindex_templates()
+            logger.info("模板语义向量预计算完成：%s", result)
+        except LLMUnavailableError as exc:
+            logger.warning("模板语义向量预计算跳过（模型不可达）：%s", exc)
+        except Exception as exc:  # noqa: BLE001 预计算失败不得阻断启动
+            logger.warning("模板语义向量预计算异常（已忽略）：%s", exc)
+        finally:
+            db.close()
+
     logger.info("%s v%s 启动完成，API 前缀：%s", settings.APP_NAME, settings.APP_VERSION, settings.API_V1_PREFIX)
     yield
     # 关闭时的清理逻辑（当前无需释放的资源）

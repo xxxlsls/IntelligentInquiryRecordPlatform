@@ -85,3 +85,34 @@ class AdoptSuggestionResult(BaseModel):
     qa_id: str | None = Field(default=None, description="生成的问答项ID")
     is_duplicate: bool = Field(default=False, description="是否因重复而未新增（去重处理）")
     message: str = Field(default="", description="结果描述")
+
+
+# ============================================================
+# 大模型私有化接入运维（/ai/llm/*）
+# ============================================================
+class LLMCapabilitiesOut(BaseModel):
+    """四项分能力开关状态（可单独降级）。"""
+
+    semantic_match: bool = Field(description="能力一：语义匹配推荐")
+    analysis: bool = Field(description="能力二：侦查研判建议生成")
+    extraction: bool = Field(description="能力三：五流要素抽取")
+    import_parse: bool = Field(description="能力四：历史笔录解析导入")
+
+
+class LLMStatusOut(BaseModel):
+    """LLM 可达性与配置状态（供内网排障）。"""
+
+    enabled: bool = Field(description="总开关是否开启")
+    reachable: bool = Field(description="模型端点是否可达（不可达时接口仍 200）")
+    base_url: str = Field(description="OpenAI 兼容服务基础地址")
+    chat_model: str = Field(description="对话模型名")
+    embedding_model: str = Field(description="向量模型名")
+    capabilities: LLMCapabilitiesOut = Field(description="分能力开关状态")
+
+
+class LLMReindexResult(BaseModel):
+    """模板语义向量重建结果（能力一支撑）。"""
+
+    indexed: int = Field(description="成功重建向量的模板数")
+    failed: int = Field(description="失败数")
+    model: str = Field(description="使用的向量模型名")

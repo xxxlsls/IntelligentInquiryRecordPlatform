@@ -17,6 +17,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.enums import (
     CHAPTER_LABEL,
     Chapter,
@@ -28,6 +29,7 @@ from app.core.exceptions import ValidationError
 from app.models.record import QAItem, RecordSession
 from app.schemas.fiveflow import ParseResult, ParsedQA
 from app.services.fiveflow_service import FiveFlowService
+from app.services.llm import LLMService, LLMUnavailableError
 
 # 问答对识别正则：匹配"问：...答：..."结构（兼容全角/半角冒号）
 _RE_QUESTION = re.compile(r"^\s*问\s*[:：]\s*(.+)$")
@@ -49,6 +51,8 @@ class ImportService:
     def __init__(self, db: Session):
         self.db = db
         self.fiveflow_service = FiveFlowService(db)
+        # 大模型能力门面（能力四：历史笔录解析）；未启用时调用一律抛降级信号
+        self._llm = LLMService(db)
 
     # ============================================================
     # 一、文本解析（FR-3.5.3 处理逻辑步骤 1~2）
@@ -56,18 +60,56 @@ class ImportService:
     def parse_text(self, text: str) -> ParseResult:
         """解析笔录文本，提取问答对并归类章节。
 
-        解析策略：
-        - 按行扫描，识别"问："与"答："标记，配对为问答项；
-        - 多行答案自动拼接；
-        - 根据问题关键词归类大纲章节；
-        - 非标准格式（无问答标记）降级为纯文本导入（异常与边界）。
+        解析策略（能力四）：
+        - 若 LLM_ENABLE_IMPORT_PARSE 开启，优先调用大模型解析得到问答对 + 章节归类
+          （章节已回落到合法 Chapter 枚举）；
+        - 解析异常/开关关闭/未解析出问答 → 回落现有正则 + 章节归类 + 纯文本兜底链路。
 
         :param text: 笔录文本内容
-        :return: 解析结果（问答对 + 五流分析 + 缺口草稿）
+        :return: 解析结果（问答对 + 解析状态）
         """
         if not text or not text.strip():
             raise ValidationError("笔录文本内容为空")
 
+        # 能力四：优先大模型解析，不可用时返回 None 以回落规则链路
+        llm_result = self._parse_by_llm(text)
+        if llm_result is not None:
+            parsed_qa, parse_success, parse_message = llm_result
+        else:
+            parsed_qa, parse_success, parse_message = self._parse_by_rules(text)
+
+        return ParseResult(
+            parsed_qa=parsed_qa,
+            qa_count=len(parsed_qa),
+            parse_success=parse_success,
+            parse_message=parse_message,
+        )
+
+    def _parse_by_llm(self, text: str) -> tuple[list[ParsedQA], bool, str] | None:
+        """大模型解析链路（能力四）。
+
+        :return: (问答对, 解析是否成功, 提示)；未启用/不可用/未解析出问答时返回 None（触发回落）
+        """
+        if not (settings.LLM_ENABLED and settings.LLM_ENABLE_IMPORT_PARSE):
+            return None
+        try:
+            result = self._llm.parse_record(text)
+        except LLMUnavailableError:
+            return None
+        parsed_qa = [
+            ParsedQA(chapter=q.chapter, question=q.question, answer=q.answer)
+            for q in result.qa
+        ]
+        # LLM 未解析出任何问答时回落规则链路，避免空结果
+        if not parsed_qa:
+            return None
+        return parsed_qa, True, f"大模型成功解析 {len(parsed_qa)} 组问答"
+
+    def _parse_by_rules(self, text: str) -> tuple[list[ParsedQA], bool, str]:
+        """规则解析链路（降级兜底，逻辑与接入大模型前一致）。
+
+        按行扫描识别"问：/答："标记配对；未识别到问答对时降级为纯文本导入。
+        """
         qa_pairs = self._extract_qa_pairs(text)
 
         # 非标准格式降级：未识别到问答对时，按段落作为问题导入（降级为纯文本）
@@ -87,13 +129,7 @@ class ImportService:
             )
             for q, a in qa_pairs
         ]
-
-        return ParseResult(
-            parsed_qa=parsed_qa,
-            qa_count=len(parsed_qa),
-            parse_success=parse_success,
-            parse_message=parse_message or f"成功解析 {len(parsed_qa)} 组问答",
-        )
+        return parsed_qa, parse_success, parse_message or f"成功解析 {len(parsed_qa)} 组问答"
 
     def parse_docx(self, content: bytes) -> ParseResult:
         """解析 Word 文档笔录（FR-3.5.3：上传已有笔录文件）。

@@ -25,12 +25,15 @@ from app.schemas.ai import (
     AdoptSuggestionRequest,
     AdoptSuggestionResult,
     AnalysisResult,
+    LLMReindexResult,
+    LLMStatusOut,
     SuggestionOut,
 )
 from app.schemas.common import ApiResponse
 from app.schemas.template import TemplateRecommendRequest, TemplateRecommendResult
 from app.services.ai_service import AiService
 from app.services.fiveflow_service import FiveFlowService
+from app.services.llm import LLMService, LLMUnavailableError
 from app.services.session_service import SessionService
 
 router = APIRouter(prefix="/ai", tags=["BE-5 AI 研判推荐"])
@@ -156,3 +159,43 @@ def adopt_suggestion(
     return ApiResponse.ok(AdoptSuggestionResult(
         success=True, qa_id=qa.id, is_duplicate=False, message="推荐问题已采纳并追加至问询列表"
     ))
+
+
+# ============================================================
+# 三、大模型私有化接入运维（内网排障）
+# ============================================================
+@router.get("/llm/status", response_model=ApiResponse[LLMStatusOut], summary="LLM 接入状态",
+            dependencies=[Depends(require_permission(Permission.AI_CONFIG))])
+def llm_status(
+    current_user: CurrentUser,
+    db: DbSession,
+) -> ApiResponse[LLMStatusOut]:
+    """返回大模型可达性、聊天/向量模型名与四项能力开关（便于内网排障）。
+
+    模型不可达时 reachable=False 但接口仍返回 200，不因探活失败而报错。
+    权限：系统管理员（AI 模型参数配置权限）。
+    """
+    status = LLMService(db).status()
+    return ApiResponse.ok(LLMStatusOut.model_validate(status))
+
+
+@router.post("/llm/reindex-templates", response_model=ApiResponse[LLMReindexResult],
+             summary="重建模板语义向量索引",
+             dependencies=[Depends(require_permission(Permission.TEMPLATE_MANAGE))])
+def reindex_templates(
+    current_user: CurrentUser,
+    db: DbSession,
+) -> ApiResponse[LLMReindexResult]:
+    """触发启用模板的语义指纹向量重算（能力一支撑）。
+
+    管理员在模板变更后调用；语义能力未启用或模型不可达时返回失败提示（不抛 500）。
+    权限：系统管理员（模板管理权限）。
+    """
+    try:
+        result = LLMService(db).reindex_templates()
+    except LLMUnavailableError as exc:
+        return ApiResponse.fail(message=f"无法重建模板向量索引：{exc}")
+    return ApiResponse.ok(
+        LLMReindexResult.model_validate(result),
+        message=f"模板语义向量重建完成，共 {result['indexed']} 条",
+    )

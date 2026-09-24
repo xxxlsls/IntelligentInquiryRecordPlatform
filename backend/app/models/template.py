@@ -44,6 +44,17 @@ class Template(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, comment="排序号")
 
+    # ---------- 语义指纹向量（大模型私有化接入 · 能力一，均可空）----------
+    # 演示库通过 create_all 自动生效；LLM_ENABLED=False 时两列恒为 NULL，不影响规则算法。
+    # embedding：JSON 序列化的向量字符串（如 "[0.12, -0.03, ...]"），用于 F_sem 余弦相似度；
+    # embedding_model：记录生成该向量的模型名，模型变更后不匹配即视为过期，需重算。
+    embedding: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="模板语义指纹向量（JSON 序列化，可空）"
+    )
+    embedding_model: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, comment="生成向量的模型名（变更即视为过期需重算）"
+    )
+
     # 关系：标准问题集、特征信号词
     questions: Mapped[list["TemplateQuestion"]] = relationship(
         "TemplateQuestion", back_populates="template", cascade="all, delete-orphan",

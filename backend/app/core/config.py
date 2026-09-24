@@ -85,6 +85,38 @@ class Settings(BaseSettings):
     # ---------- 演示数据 ----------
     SEED_DEMO_DATA: bool = True                 # 启动时是否初始化种子数据
 
+    # ============================================================
+    # 大模型私有化接入配置（12.3 Q-7 扩展点落地）
+    # ------------------------------------------------------------
+    # 部署形态：内网私有化部署，统一走 OpenAI 兼容 HTTP 接口
+    # （/v1/chat/completions、/v1/embeddings），适配 Ollama / vLLM / Xinference，
+    # 仅用 httpx 直连，不引入任何厂商 SDK。案情数据只发送至内网模型端点。
+    #
+    # 混合模式：LLM_ENABLED=False（默认）时零行为变化，全部能力走现有规则算法；
+    # 开启后 LLM 为主，超时/异常/未启用自动降级到规则链路（复用 is_degraded/is_timeout）。
+    # ============================================================
+    # 总开关：默认关闭，保证在未部署模型的环境下行为与现状完全一致
+    LLM_ENABLED: bool = False
+    # OpenAI 兼容服务基础地址（Ollama 默认 http://127.0.0.1:11434/v1）
+    LLM_BASE_URL: str = "http://127.0.0.1:11434/v1"
+    # 内网服务通常无需鉴权，保留占位 key 以兼容强制要求 Authorization 头的网关
+    LLM_API_KEY: str = "not-needed"
+    # 对话（chat/completions）与向量（embeddings）模型名
+    LLM_CHAT_MODEL: str = "qwen2.5:14b-instruct"
+    LLM_EMBEDDING_MODEL: str = "bge-m3"
+    # 单次请求超时（秒）；超时即触发降级，避免拖慢问询交互
+    LLM_TIMEOUT_SECONDS: float = 30.0
+    # 失败重试次数（0 表示不重试，仅首次请求）
+    LLM_MAX_RETRIES: int = 1
+    # 生成温度：研判/抽取任务需稳定输出，默认低温
+    LLM_TEMPERATURE: float = 0.1
+
+    # ---------- 分能力开关（可单独降级任一能力） ----------
+    LLM_ENABLE_SEMANTIC_MATCH: bool = True   # 能力一：语义匹配推荐（F_sem 向量化）
+    LLM_ENABLE_ANALYSIS: bool = True         # 能力二：侦查研判建议生成
+    LLM_ENABLE_EXTRACTION: bool = True       # 能力三：五流要素抽取（正则 + LLM 融合）
+    LLM_ENABLE_IMPORT_PARSE: bool = True     # 能力四：历史笔录解析导入
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -192,6 +192,37 @@ def main() -> None:
         }, headers=auth)
         check("历史笔录解析", r.status_code == 200 and r.json()["data"]["qa_count"] >= 3, r.text)
 
+        # ---------- 12. 大模型私有化接入运维接口（默认关闭，回归零变化）----------
+        print("12) 大模型接入状态与运维（BE-5）")
+        # 管理员登录（具备 AI 配置与模板管理权限）
+        r = client.post(f"{PREFIX}/auth/login", json={"officer_no": "ADMIN001", "password": "Admin@12345"})
+        check("管理员登录成功", r.status_code == 200 and r.json()["success"], r.text)
+        admin_auth = {"Authorization": f"Bearer {r.json()['data']['access_token']}"}
+
+        # LLM 状态接口：默认 LLM_ENABLED=False，模型不可达但接口应 200
+        r = client.get(f"{PREFIX}/ai/llm/status", headers=admin_auth)
+        check("LLM 状态接口 200", r.status_code == 200 and r.json()["success"], r.text)
+        st = r.json()["data"] if r.status_code == 200 else {}
+        if st:
+            from app.core.config import settings as _settings
+            check("总开关与配置一致", st["enabled"] is _settings.LLM_ENABLED, r.text)
+            check("返回四项能力开关", set(st["capabilities"].keys()) == {
+                "semantic_match", "analysis", "extraction", "import_parse"}, r.text)
+            if not _settings.LLM_ENABLED:
+                check("默认关闭时模型不可达 reachable=False", st["reachable"] is False, r.text)
+
+        # 办案民警无 AI 配置权限 → 403（RBAC 二次校验）
+        r = client.get(f"{PREFIX}/ai/llm/status", headers=auth)
+        check("民警访问 LLM 状态被拒 403", r.status_code == 403, f"实际 {r.status_code}")
+
+        # 模板向量重建：默认语义能力未启用 → 返回失败提示但接口 200
+        r = client.post(f"{PREFIX}/ai/llm/reindex-templates", headers=admin_auth)
+        if st and st.get("enabled") and st.get("reachable"):
+            # 可选：环境变量驱动——开启且端点可达时，重建应成功（走 LLM 路径）
+            check("端点可达时重建向量成功", r.status_code == 200 and r.json()["success"] is True, r.text)
+        else:
+            check("未启用时重建向量返回失败提示", r.status_code == 200 and r.json()["success"] is False, r.text)
+
     # ---------- 汇总 ----------
     print("=" * 60)
     print(f"测试完成：通过 {_passed} 项，失败 {_failed} 项")
