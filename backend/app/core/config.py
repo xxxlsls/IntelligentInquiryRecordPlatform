@@ -102,7 +102,8 @@ class Settings(BaseSettings):
     # 内网服务通常无需鉴权，保留占位 key 以兼容强制要求 Authorization 头的网关
     LLM_API_KEY: str = "not-needed"
     # 对话（chat/completions）与向量（embeddings）模型名
-    LLM_CHAT_MODEL: str = "qwen2.5:14b-instruct"
+    # 对话模型默认 qwen3:8b（Ollama）；向量模型仍用 bge-m3（qwen3 无内置 embedding 能力，需单独部署）
+    LLM_CHAT_MODEL: str = "qwen3:8b"
     LLM_EMBEDDING_MODEL: str = "bge-m3"
     # 单次请求超时（秒）；超时即触发降级，避免拖慢问询交互
     LLM_TIMEOUT_SECONDS: float = 30.0
