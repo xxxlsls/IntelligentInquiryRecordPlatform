@@ -1,0 +1,31 @@
+# ============================================================
+# 智能问询笔录平台 · 后端依赖清单
+# 技术栈：FastAPI + SQLAlchemy 2.x + Pydantic v2 + JWT + python-docx
+# 安装：pip install -r requirements.txt
+# ============================================================
+
+# Web 框架与 ASGI 服务器
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+starlette==1.7.0
+
+# 数据校验与序列化（Pydantic v2）
+pydantic==2.12.4
+pydantic-settings==2.12.0
+email-validator==2.3.0
+
+# ORM 与数据库（演示环境使用 SQLite，生产可切换 PostgreSQL/MySQL）
+SQLAlchemy==2.0.43
+
+# 认证与安全
+PyJWT==2.10.1
+bcrypt==5.0.0
+
+# 文件上传（multipart/form-data 解析）
+python-multipart==0.0.32
+
+# DOCX 红头文书生成
+python-docx==1.2.0
+
+# 环境变量加载
+python-dotenv==1.1.0
