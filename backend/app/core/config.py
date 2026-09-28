@@ -106,7 +106,12 @@ class Settings(BaseSettings):
     LLM_CHAT_MODEL: str = "qwen3:8b"
     LLM_EMBEDDING_MODEL: str = "bge-m3"
     # 单次请求超时（秒）；超时即触发降级，避免拖慢问询交互
+    # 该值作用于向量（embeddings）等轻量快速调用：语义匹配为同步交互，短超时可尽快降级
     LLM_TIMEOUT_SECONDS: float = 30.0
+    # 对话（chat/completions）生成类任务专用超时（秒）：研判 / 五流抽取 / 笔录解析
+    # 本地大模型推理较慢（qwen3:8b 单次研判约 20 秒，冷启动或长文本更久），
+    # 且前端研判已改为后台非阻塞加载，故给足超时以尽量避免降级为规则结果
+    LLM_CHAT_TIMEOUT_SECONDS: float = 120.0
     # 失败重试次数（0 表示不重试，仅首次请求）
     LLM_MAX_RETRIES: int = 1
     # 生成温度：研判/抽取任务需稳定输出，默认低温

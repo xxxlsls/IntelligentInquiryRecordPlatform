@@ -70,11 +70,22 @@ async def parse_docx(
 ) -> ApiResponse[ParseResult]:
     """解析上传的 Word 笔录文档（FR-3.5.3：上传已有笔录文件）。
 
-    使用 python-docx 提取段落文本后复用文本解析逻辑；解析失败提示手工校对。
+    仅支持 .docx（Office Open XML，本质为 ZIP 容器）：python-docx 无法解析旧版
+    .doc（OLE2 二进制复合文档），直接读取会抛 "File is not a zip file"。
+    故此处按文件魔数预校验，对 .doc / 损坏 / 伪扩展名文件给出明确的转换提示。
     """
-    if not (file.filename or "").lower().endswith((".docx", ".doc")):
-        raise ValidationError("仅支持 Word 文档（.docx/.doc）")
+    filename = (file.filename or "").lower()
+    if not filename.endswith((".docx", ".doc")):
+        raise ValidationError("仅支持 Word 文档（.docx）")
     content = await file.read()
+    if not content:
+        raise ValidationError("上传文件为空，请重新选择")
+    # .docx 本质是 ZIP（以 "PK" 魔数开头）；非 ZIP 多为旧版 .doc 或损坏/改名文件
+    if content[:2] != b"PK":
+        # OLE2 复合文档魔数（D0CF11E0A1B11AE1）= 旧版 .doc，python-docx 不支持
+        if content[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+            raise ValidationError("暂不支持旧版 .doc 格式，请用 Word 打开后「另存为 .docx」再上传")
+        raise ValidationError("文件不是有效的 .docx（可能已损坏或被改名），请用 Word 另存为 .docx 后重试")
     result = ImportService(db).parse_docx(content)
     result = _enrich_parse_result(db, result)
     return ApiResponse.ok(result, message=result.parse_message)

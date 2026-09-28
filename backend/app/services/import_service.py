@@ -135,19 +135,28 @@ class ImportService:
         """解析 Word 文档笔录（FR-3.5.3：上传已有笔录文件）。
 
         使用 python-docx 提取段落文本后复用文本解析逻辑。
-        解析失败时提示手工校对（异常与边界）。
+        仅支持 .docx（ZIP 容器）；非 ZIP（旧版 .doc/损坏文件）会抛 BadZipFile，
+        此处转为友好提示（接口层已按魔数预校验，此为兜底防线）。
         """
+        import io
+        import zipfile
+
+        from docx import Document
+
         try:
-            import io
-
-            from docx import Document
-
             doc = Document(io.BytesIO(content))
-            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-            return self.parse_text(text)
+        except zipfile.BadZipFile as exc:
+            # .docx 本质是 ZIP；非 ZIP 多为旧版 .doc 或损坏/伪装文件
+            raise ValidationError(
+                "无法读取 Word 内容：文件不是有效的 .docx（旧版 .doc 或已损坏），"
+                "请用 Word 另存为 .docx 后重试"
+            ) from exc
         except Exception as exc:  # noqa: BLE001
             # 解析失败提示手工校对（FR-3.5.3 异常与边界）
             raise ValidationError(f"Word 文档解析失败，请检查格式或手工校对：{exc}") from exc
+
+        text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        return self.parse_text(text)
 
     def _extract_qa_pairs(self, text: str) -> list[tuple[str, str | None]]:
         """从文本提取问答对列表 [(question, answer), ...]。"""
