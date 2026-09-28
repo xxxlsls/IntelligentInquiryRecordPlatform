@@ -99,7 +99,11 @@ def analyze_session(
 
     # 持久化建议到中栏（先清旧未采纳建议，重点缺口置顶）
     suggestions_payload = [s.model_dump(mode="json") for s in analysis.suggestions]
-    service.persist_ai_suggestions(session_id, suggestions_payload)
+    persisted_ids = service.persist_ai_suggestions(session_id, suggestions_payload)
+    # 用落库后的真实主键回填建议 ID：生成态的业务 ID（gap_*/llm_*）未落库，
+    # 前端“加入问询”采纳时以该 ID 查 AiSuggestion 会命中失败，故必须替换为持久化主键
+    for sug, real_id in zip(analysis.suggestions, persisted_ids):
+        sug.id = real_id
 
     return ApiResponse.ok(analysis, message="AI 研判完成")
 

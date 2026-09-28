@@ -609,10 +609,15 @@ class SessionService:
         )
         return qa
 
-    def persist_ai_suggestions(self, session_id: str, suggestions: list[dict]) -> None:
+    def persist_ai_suggestions(self, session_id: str, suggestions: list[dict]) -> list[str]:
         """持久化 AI 研判建议到中栏（供断点恢复，DE-10）。
 
         先清除旧的未采纳建议，再写入新建议（重点缺口追问置顶 GR-2）。
+
+        :return: 新写入建议的真实主键 ID 列表（顺序与入参一致）。
+            建议生成态携带的是业务语义 ID（gap_*/llm_*，未落库且长度超主键上限），
+            落库后主键由 UUIDPrimaryKeyMixin 重新生成；调用方需用此返回值回填给前端，
+            否则“加入问询”采纳时会因 ID 不匹配报“建议不存在或已失效”。
         """
         # 删除旧的未采纳建议（保留已采纳的追溯记录）
         old = self.db.execute(
@@ -624,8 +629,9 @@ class SessionService:
         for s in old:
             self.db.delete(s)
 
+        created: list[AiSuggestion] = []
         for idx, sg in enumerate(suggestions):
-            self.db.add(AiSuggestion(
+            obj = AiSuggestion(
                 session_id=session_id,
                 suggestion_type=sg["suggestion_type"],
                 title=sg.get("title"),
@@ -636,8 +642,13 @@ class SessionService:
                 target_element_code=sg.get("target_element_code"),
                 is_pinned=sg.get("is_pinned", False),
                 sort_order=idx,
-            ))
+            )
+            self.db.add(obj)
+            created.append(obj)
+        self.db.flush()   # 触发主键生成（UUID）
         self.db.commit()
+        # expire_on_commit=False，commit 后仍可读取已生成的主键
+        return [obj.id for obj in created]
 
     def _list_suggestions(self, session_id: str) -> list[AiSuggestion]:
         """列出会话的 AI 建议（置顶优先，未采纳在前）。"""
