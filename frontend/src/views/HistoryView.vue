@@ -127,12 +127,22 @@ async function doParse() {
   }
 }
 
+/** 文件选择回调：取文件解析，并重置 input 以允许再次选择同一文件 */
+function onFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (file && !parsing.value) void onParseFile(file)
+  input.value = '' // 重置，确保下次选同一文件仍能触发 change
+}
+
 async function onParseFile(file: File) {
   parsing.value = true
   parseResult.value = null
   try {
     parseResult.value = await parseDocx(file)
     toast.success(`解析完成：${parseResult.value.qa_count} 组问答`)
+  } catch {
+    // 失败提示已由 axios 响应拦截器统一 toast（如 .doc/损坏文件），此处仅确保状态复位
   } finally {
     parsing.value = false
   }
@@ -299,10 +309,16 @@ async function doRebuild() {
           placeholder="粘贴历史笔录文本（支持 问：/答： 结构自动解析）"
           style="min-height: 140px"
         ></textarea>
-        <label v-else class="file-pick">
-          <AppIcon name="file" :size="18" class="muted" />
-          选择 .docx 笔录文件
-          <input type="file" accept=".docx,.doc" hidden @change="($event.target as HTMLInputElement).files?.[0] && onParseFile(($event.target as HTMLInputElement).files![0])" />
+        <label v-else :class="['file-pick', { busy: parsing }]">
+          <template v-if="parsing">
+            <span class="spinner"></span>
+            正在解析文档，请稍候…（大模型解析约需 20 秒）
+          </template>
+          <template v-else>
+            <AppIcon name="file" :size="18" class="muted" />
+            选择 .docx 笔录文件（旧版 .doc 请先用 Word 另存为 .docx）
+          </template>
+          <input type="file" accept=".docx" hidden :disabled="parsing" @change="onFileChange" />
         </label>
         <button v-if="importTab === 'text'" class="btn btn-primary" style="width: 100%; margin-top: 12px" :disabled="parsing || !importText.trim()" @click="doParse">
           <span v-if="parsing" class="spinner"></span> 解析笔录
@@ -518,6 +534,14 @@ async function doRebuild() {
   cursor: pointer;
   color: var(--text-2);
   font-size: 13px;
+}
+
+/* 解析进行中：置灰并禁用点击，展示 spinner 反馈（避免用户误以为“没反应”） */
+.file-pick.busy {
+  cursor: progress;
+  opacity: 0.7;
+  pointer-events: none;
+  color: var(--text-1);
 }
 
 .dr-section {

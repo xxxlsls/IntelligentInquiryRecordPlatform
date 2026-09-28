@@ -42,6 +42,8 @@ class LLMClient:
         self._chat_model = settings.LLM_CHAT_MODEL
         self._embedding_model = settings.LLM_EMBEDDING_MODEL
         self._timeout = settings.LLM_TIMEOUT_SECONDS
+        # 对话生成类任务（研判/抽取/解析）专用超时，比向量调用更宽松
+        self._chat_timeout = settings.LLM_CHAT_TIMEOUT_SECONDS
         self._max_retries = max(0, settings.LLM_MAX_RETRIES)
         self._temperature = settings.LLM_TEMPERATURE
         # httpx.Client 连接池（延迟创建，首次调用时初始化）
@@ -76,14 +78,21 @@ class LLMClient:
         if not self.enabled:
             raise LLMUnavailableError("LLM 未启用（LLM_ENABLED=False）")
 
-    def _post_json(self, path: str, payload: dict) -> dict:
-        """带重试的 POST 请求，返回解析后的 JSON；任何失败抛 LLMUnavailableError。"""
+    def _post_json(self, path: str, payload: dict, timeout: float | None = None) -> dict:
+        """带重试的 POST 请求，返回解析后的 JSON；任何失败抛 LLMUnavailableError。
+
+        :param timeout: 本次请求超时（秒）。None 时沿用连接池默认（settings.LLM_TIMEOUT_SECONDS）；
+            注意 httpx 中 timeout=None 语义为“禁用超时”，故仅在显式传入时才覆盖，避免透传 None。
+        """
         client = self._client()
         attempts = self._max_retries + 1
         last_err: str = ""
+        post_kwargs: dict = {"json": payload}
+        if timeout is not None:
+            post_kwargs["timeout"] = timeout
         for i in range(attempts):
             try:
-                resp = client.post(path, json=payload)
+                resp = client.post(path, **post_kwargs)
                 if resp.status_code // 100 != 2:
                     last_err = f"HTTP {resp.status_code}: {resp.text[:200]}"
                     # 4xx 通常为请求本身问题，重试无意义，直接降级
@@ -130,7 +139,7 @@ class LLMClient:
             "stream": False,
             "response_format": {"type": "json_object"},
         }
-        data = self._post_json("/chat/completions", payload)
+        data = self._post_json("/chat/completions", payload, timeout=self._chat_timeout)
         try:
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
